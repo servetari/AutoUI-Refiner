@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+current_ui.png
+workspace/
+.DS_Store
