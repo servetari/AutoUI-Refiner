@@ -1,34 +1,34 @@
 import os
-from openai import OpenAI
-from dotenv import load_dotenv
+import re
+
+from llm_client import call_llm
 from utils import load_prompts
 
-load_dotenv()
-
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-)
 
 def generate_initial_code(user_prompt, workspace="workspace"):
     """Generates the initial HTML file based on the user's prompt."""
     model_name = os.getenv("CODER_MODEL", "deepseek/deepseek-chat")
-    
-    if not os.path.exists(workspace):
-        os.makedirs(workspace)
-        
+    os.makedirs(workspace, exist_ok=True)
+
     prompts = load_prompts("config.md")
-    base_prompt = prompts.get("Coder Initial Prompt", "You are an expert Frontend Developer. Build what the user wants: {user_prompt}")
+    base_prompt = prompts.get(
+        "Coder Initial Prompt",
+        "You are an expert Frontend Developer. Build what the user wants: {user_prompt}",
+    )
     prompt = base_prompt.replace("{user_prompt}", user_prompt)
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    response = call_llm([{"role": "user", "content": prompt}], model=model_name)
+    if response is None:
+        return False
 
-    new_code = response.choices[0].message.content.strip()
-    _save_cleaned_code(new_code, os.path.join(workspace, "index.html"))
+    code = _extract_code(response)
+    if not _looks_like_html(code):
+        print("[-] Model output does not look like an HTML document.")
+        return False
+
+    _write_code(code, os.path.join(workspace, "index.html"))
     return True
+
 
 def update_code(critique, original_prompt, workspace="workspace"):
     """Updates the code based on the Vision agent's critique."""
@@ -43,28 +43,47 @@ def update_code(critique, original_prompt, workspace="workspace"):
 
     prompts = load_prompts("config.md")
     base_prompt = prompts.get("Coder Update Prompt", "Update this code based on critique.")
-    
+
     prompt = base_prompt.replace("{original_prompt}", original_prompt)
     prompt = prompt.replace("{critique}", critique)
     prompt = prompt.replace("{current_code}", current_code)
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    response = call_llm([{"role": "user", "content": prompt}], model=model_name)
+    if response is None:
+        return False
 
-    new_code = response.choices[0].message.content.strip()
-    _save_cleaned_code(new_code, file_path)
+    code = _extract_code(response)
+    if not _looks_like_html(code):
+        # Keep the last working version instead of overwriting it with garbage.
+        print("[-] Model output does not look like an HTML document. Keeping current version.")
+        return False
+
+    _write_code(code, file_path)
     return True
 
-def _save_cleaned_code(raw_code, file_path):
-    if raw_code.startswith("```"):
-        raw_code = raw_code.split("\n", 1)[1]
-    if raw_code.endswith("```"):
-        raw_code = raw_code.rsplit("\n", 1)[0]
-    
-    if raw_code.startswith("html\n"):
-        raw_code = raw_code.split("\n", 1)[1]
-        
+
+def _extract_code(raw):
+    """Extracts the HTML document from a raw model response."""
+    raw = raw.strip()
+    match = re.search(r"```(?:html)?\s*\n(.*?)```", raw, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    lowered = raw.lower()
+    for marker in ("<!doctype", "<html"):
+        idx = lowered.find(marker)
+        if idx == 0:
+            return raw
+        if idx > 0:
+            return raw[idx:].strip()
+    return raw
+
+
+def _looks_like_html(code):
+    lowered = code.lower()
+    return "<!doctype" in lowered or "<html" in lowered
+
+
+def _write_code(code, file_path):
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write(raw_code)
+        f.write(code)

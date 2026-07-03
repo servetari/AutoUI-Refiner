@@ -1,7 +1,9 @@
 venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 .env
 current_ui.png
 workspace/
+history/
 .DS_Store
